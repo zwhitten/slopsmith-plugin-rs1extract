@@ -111,7 +111,7 @@ def setup(app, context):
 
         def _do_extract():
             try:
-                from extractor import PsarcReader, process_pack, PACKS
+                from rs1_extractor import PsarcReader, process_pack, PACKS
 
                 # Override paths
                 songs_reader = None
@@ -172,7 +172,7 @@ def setup(app, context):
 
         def _extract_with_progress(pack_name, config, songs_reader, output_dir, queue):
             """Wrapper around process_pack that reports progress."""
-            from extractor import (
+            from rs1_extractor import (
                 PsarcReader, parse_bnk_wem_id, get_song_info, sanitize_filename,
                 build_hsan, build_aggregate_graph, update_xblock,
             )

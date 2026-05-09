@@ -1,11 +1,20 @@
 // RS1 Song Extractor plugin
 
 (function() {
+    // Idempotency: if screen.js is re-evaluated (loader cache miss, hot reload,
+    // older core builds without the load-side guard), don't re-wrap showScreen —
+    // each re-wrap captures the previous wrapper, growing the chain and
+    // leaking closures.
+    const HOOK_KEY = '__slopsmithRs1ExtractHooksInstalled';
+    if (window[HOOK_KEY]) return;
+
     const origShowScreen = window.showScreen;
+    if (typeof origShowScreen !== 'function') return;
     window.showScreen = function(id) {
         origShowScreen(id);
         if (id === 'plugin-rs1_extract') rs1LoadStatus();
     };
+    window[HOOK_KEY] = true;
 })();
 
 async function rs1LoadStatus() {

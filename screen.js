@@ -7,13 +7,14 @@
     // leaking closures.
     const HOOK_KEY = '__slopsmithRs1ExtractHooksInstalled';
     if (window[HOOK_KEY]) return;
-    window[HOOK_KEY] = true;
 
     const origShowScreen = window.showScreen;
+    if (typeof origShowScreen !== 'function') return;
     window.showScreen = function(id) {
         origShowScreen(id);
         if (id === 'plugin-rs1_extract') rs1LoadStatus();
     };
+    window[HOOK_KEY] = true;
 })();
 
 async function rs1LoadStatus() {

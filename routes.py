@@ -1,6 +1,7 @@
 """RS1 Song Extractor plugin — split RS1 compatibility packs into individual CDLCs."""
 
 import asyncio
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -106,6 +107,11 @@ def setup(app, context):
             return
 
         rs_dir = _find_rs_dir(dlc)
+        
+        await websocket.send_json({
+            "stage": f"Starting extraction... DLC: {dlc}, RS: {rs_dir}",
+            "progress": 2,
+        })
 
         progress_queue = asyncio.Queue()
 
@@ -189,38 +195,66 @@ def setup(app, context):
             xblock_files = {
                 name: name.rsplit("/", 1)[-1]
                 for name in reader.list_files()
-                if name.startswith("gamexblocks/nsongs/") and name.endswith(".xblock")
+                if "gamexblocks/" in name.lower() and name.endswith(".xblock")
             }
             song_keys = [(fname.replace("_fcp_dlc.xblock", "").replace(".xblock", ""), path, fname)
                          for path, fname in sorted(xblock_files.items())]
+
+            queue.put_nowait({
+                "stage": f"Found {len(song_keys)} songs in {pack_name} pack",
+                "progress": 5,
+            })
 
             flat_root = reader.get("flatmodels/rs/rsenumerable_root.flat")
             flat_song = reader.get("flatmodels/rs/rsenumerable_song.flat")
             hsan_path = f"manifests/{manifest_dir}/{manifest_dir}.hsan"
             hsan_raw = reader.get(hsan_path)
+            if not hsan_raw:
+                # Try with leading slash or different root
+                hsan_raw = reader.get_matching([f"*{manifest_dir}.hsan"])
+                if hsan_raw:
+                    hsan_raw = list(hsan_raw.values())[0]
+
             hsan_data = json.loads(hsan_raw) if hsan_raw else {"Entries": {}}
             hsan_entries = hsan_data.get("Entries", {})
 
             audio_bnks = {}
             if not audio_self_contained and songs_reader:
                 for key, _, _ in song_keys:
-                    for pat in [f"audio/windows/song_{key}.bnk", f"audio/windows/song_{key}_preview.bnk"]:
-                        data = songs_reader.get(pat)
-                        if data:
-                            audio_bnks[pat] = data
+                    for pat in [f"*song_{key}.bnk", f"*song_{key}_preview.bnk"]:
+                        matches = songs_reader.get_matching([pat])
+                        for p, data in matches.items():
+                            audio_bnks[p.lstrip("/")] = data
+                queue.put_nowait({
+                    "stage": f"Found {len(audio_bnks)} audio BNKs in songs.psarc",
+                    "progress": 10,
+                })
+            elif not audio_self_contained and not songs_reader:
+                 queue.put_nowait({
+                    "stage": "Warning: songs.psarc not found, audio lookup will fail",
+                    "progress": 10,
+                })
 
             extracted = 0
             total = len(song_keys)
 
             for i, (key, xblock_path, xblock_fname) in enumerate(song_keys):
-                pct = int(5 + (i / max(total, 1)) * 90)
-                manifests = reader.get_matching([f"manifests/{manifest_dir}/{key}_*.json"])
-                sngs = reader.get_matching([f"songs/bin/generic/{key}_*.sng"])
-                album_art = reader.get_matching([f"gfxassets/album_art/album_{key}_*.dds"])
-                showlights = reader.get(f"songs/arr/{key}_showlights.xml")
+                pct = int(10 + (i / max(total, 1)) * 85)
+                manifests = reader.get_matching([f"*{manifest_dir}/{key}_*.json"])
+                sngs = reader.get_matching([f"*/{key}_*.sng"])
+                album_art = reader.get_matching([f"*/album_{key}_*.dds"])
+                showlights = reader.get_matching([f"*/{key}_showlights.xml"])
+                if showlights:
+                    showlights = list(showlights.values())[0]
+                else:
+                    showlights = None
+
                 xblock_data = reader.get(xblock_path)
 
                 if not manifests:
+                    queue.put_nowait({
+                        "stage": f"Skipping {key}: no manifests found in pack",
+                    })
                     continue
 
                 info = None
@@ -245,17 +279,24 @@ def setup(app, context):
                     extracted += 1
                     continue
 
-                song_bnk_name = f"audio/windows/song_{key}.bnk"
-                preview_bnk_name = f"audio/windows/song_{key}_preview.bnk"
+                song_bnk_pat = f"*song_{key}.bnk"
+                preview_bnk_pat = f"*song_{key}_preview.bnk"
 
                 if audio_self_contained:
-                    song_bnk = reader.get(song_bnk_name)
-                    preview_bnk = reader.get(preview_bnk_name)
+                    song_bnk = reader.get_matching([song_bnk_pat])
+                    song_bnk = list(song_bnk.values())[0] if song_bnk else None
+                    preview_bnk = reader.get_matching([preview_bnk_pat])
+                    preview_bnk = list(preview_bnk.values())[0] if preview_bnk else None
                 else:
-                    song_bnk = audio_bnks.get(song_bnk_name)
-                    preview_bnk = audio_bnks.get(preview_bnk_name)
+                    # Look up in pre-populated audio_bnks
+                    # Fix: Use the full pattern with wildcard for fnmatch
+                    song_bnk = next((v for k, v in audio_bnks.items() if fnmatch.fnmatch(k, song_bnk_pat)), None)
+                    preview_bnk = next((v for k, v in audio_bnks.items() if fnmatch.fnmatch(k, preview_bnk_pat)), None)
 
                 if not song_bnk:
+                    queue.put_nowait({
+                        "stage": f"Skipping {key}: song BNK not found",
+                    })
                     continue
 
                 song_wem_id = parse_bnk_wem_id(song_bnk)
@@ -263,19 +304,30 @@ def setup(app, context):
 
                 wem_files = {}
                 if song_wem_id:
-                    wem_name = f"audio/windows/{song_wem_id}.wem"
-                    wem_data = reader.get(wem_name) if audio_self_contained else songs_reader.get(wem_name)
+                    wem_pat = f"*{song_wem_id}.wem"
+                    if audio_self_contained:
+                        wem_data = reader.get_matching([wem_pat])
+                    else:
+                        wem_data = songs_reader.get_matching([wem_pat])
                     if wem_data:
-                        wem_files[wem_name] = wem_data
+                        wem_files[list(wem_data.keys())[0]] = list(wem_data.values())[0]
 
                 if preview_wem_id and preview_wem_id != song_wem_id:
-                    wem_name = f"audio/windows/{preview_wem_id}.wem"
-                    wem_data = reader.get(wem_name) if audio_self_contained else songs_reader.get(wem_name)
+                    wem_pat = f"*{preview_wem_id}.wem"
+                    if audio_self_contained:
+                        wem_data = reader.get_matching([wem_pat])
+                    else:
+                        wem_data = songs_reader.get_matching([wem_pat])
                     if wem_data:
-                        wem_files[wem_name] = wem_data
+                        wem_files[list(wem_data.keys())[0]] = list(wem_data.values())[0]
 
                 if not wem_files:
+                    queue.put_nowait({
+                        "stage": f"Skipping {key}: WEM audio files not found",
+                    })
                     continue
+
+
 
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tmpdir = Path(tmpdir)

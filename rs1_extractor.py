@@ -261,7 +261,7 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
     xblock_files = {
         name: name.rsplit("/", 1)[-1]
         for name in reader.list_files()
-        if name.startswith("gamexblocks/nsongs/") and name.endswith(".xblock")
+        if "gamexblocks/" in name.lower() and name.endswith(".xblock")
     }
 
     song_keys = []
@@ -282,36 +282,40 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
     # Load the shared HSAN
     hsan_path = f"manifests/{manifest_dir}/{manifest_dir}.hsan"
     hsan_raw = reader.get(hsan_path)
+    if not hsan_raw:
+        hsan_raw = reader.get_matching([f"*{manifest_dir}.hsan"])
+        if hsan_raw:
+            hsan_raw = list(hsan_raw.values())[0]
+
     hsan_data = json.loads(hsan_raw) if hsan_raw else {"Entries": {}}
     hsan_entries = hsan_data.get("Entries", {})
 
     # Pre-load all BNK files from audio source to extract WEM IDs
+    audio_bnks = {}
     if not audio_self_contained:
-        # DLC pack: audio is in songs.psarc
-        # Collect all needed BNK patterns
-        bnk_patterns = []
-        for key, _, _ in song_keys:
-            bnk_patterns.append(f"audio/windows/song_{key}.bnk")
-            bnk_patterns.append(f"audio/windows/song_{key}_preview.bnk")
-
-        print(f"  Loading {len(bnk_patterns)} BNK files from songs.psarc...")
-        # Read BNKs from songs.psarc
-        audio_bnks = {}
-        for pat in bnk_patterns:
-            data = songs_reader.get(pat)
-            if data:
-                audio_bnks[pat] = data
+        if not songs_reader:
+            print("  Warning: songs.psarc not found, audio lookup will fail")
+        else:
+            # DLC pack: audio is in songs.psarc
+            # Collect all needed BNK patterns
+            print(f"  Loading BNK files from songs.psarc...")
+            for key, _, _ in song_keys:
+                for pat in [f"*song_{key}.bnk", f"*song_{key}_preview.bnk"]:
+                    matches = songs_reader.get_matching([pat])
+                    for p, data in matches.items():
+                        audio_bnks[p.lstrip("/")] = data
+            print(f"  Found {len(audio_bnks)} audio BNKs in songs.psarc")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
 
     for i, (key, xblock_path, xblock_fname) in enumerate(song_keys):
         # Gather files for this song
-        manifests = reader.get_matching([f"manifests/{manifest_dir}/{key}_*.json"])
-        sngs = reader.get_matching([f"songs/bin/generic/{key}_*.sng"])
-        album_art = reader.get_matching([f"gfxassets/album_art/album_{key}_*.dds"])
-        showlights_path = f"songs/arr/{key}_showlights.xml"
-        showlights = reader.get(showlights_path)
+        manifests = reader.get_matching([f"*{manifest_dir}/{key}_*.json"])
+        sngs = reader.get_matching([f"*/{key}_*.sng"])
+        album_art = reader.get_matching([f"*/album_{key}_*.dds"])
+        showlights = reader.get_matching([f"*/{key}_showlights.xml"])
+        showlights = list(showlights.values())[0] if showlights else None
         xblock_data = reader.get(xblock_path)
 
         if not manifests:
@@ -332,15 +336,17 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
         out_name = f"{title} - {artist}_p.psarc"
 
         # Get audio
-        song_bnk_name = f"audio/windows/song_{key}.bnk"
-        preview_bnk_name = f"audio/windows/song_{key}_preview.bnk"
+        song_bnk_pat = f"*song_{key}.bnk"
+        preview_bnk_pat = f"*song_{key}_preview.bnk"
 
         if audio_self_contained:
-            song_bnk = reader.get(song_bnk_name)
-            preview_bnk = reader.get(preview_bnk_name)
+            song_bnk = reader.get_matching([song_bnk_pat])
+            song_bnk = list(song_bnk.values())[0] if song_bnk else None
+            preview_bnk = reader.get_matching([preview_bnk_pat])
+            preview_bnk = list(preview_bnk.values())[0] if preview_bnk else None
         else:
-            song_bnk = audio_bnks.get(song_bnk_name)
-            preview_bnk = audio_bnks.get(preview_bnk_name)
+            song_bnk = next((v for k, v in audio_bnks.items() if fnmatch.fnmatch(k, song_bnk_pat)), None)
+            preview_bnk = next((v for k, v in audio_bnks.items() if fnmatch.fnmatch(k, preview_bnk_pat)), None)
 
         if not song_bnk:
             print(f"  [{i+1}/{len(song_keys)}] {key}: no song BNK found, skipping")
@@ -353,26 +359,27 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
         # Get WEM files
         wem_files = {}
         if song_wem_id:
-            wem_name = f"audio/windows/{song_wem_id}.wem"
+            wem_pat = f"*{song_wem_id}.wem"
             if audio_self_contained:
-                wem_data = reader.get(wem_name)
+                wem_data = reader.get_matching([wem_pat])
             else:
-                wem_data = songs_reader.get(wem_name)
+                wem_data = songs_reader.get_matching([wem_pat])
             if wem_data:
-                wem_files[wem_name] = wem_data
+                wem_files[list(wem_data.keys())[0]] = list(wem_data.values())[0]
 
         if preview_wem_id and preview_wem_id != song_wem_id:
-            wem_name = f"audio/windows/{preview_wem_id}.wem"
+            wem_pat = f"*{preview_wem_id}.wem"
             if audio_self_contained:
-                wem_data = reader.get(wem_name)
+                wem_data = reader.get_matching([wem_pat])
             else:
-                wem_data = songs_reader.get(wem_name)
+                wem_data = songs_reader.get_matching([wem_pat])
             if wem_data:
-                wem_files[wem_name] = wem_data
+                wem_files[list(wem_data.keys())[0]] = list(wem_data.values())[0]
 
         if not wem_files:
             print(f"  [{i+1}/{len(song_keys)}] {key}: no WEM audio found, skipping")
             continue
+
 
         # Build the standalone PSARC structure in a temp directory
         with tempfile.TemporaryDirectory() as tmpdir:

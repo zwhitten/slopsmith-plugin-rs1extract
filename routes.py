@@ -107,7 +107,7 @@ def setup(app, context):
             return
 
         rs_dir = _find_rs_dir(dlc)
-        
+
         await websocket.send_json({
             "stage": f"Starting extraction... DLC: {dlc}, RS: {rs_dir}",
             "progress": 2,
@@ -230,7 +230,7 @@ def setup(app, context):
                     "progress": 10,
                 })
             elif not audio_self_contained and not songs_reader:
-                 queue.put_nowait({
+                queue.put_nowait({
                     "stage": "Warning: songs.psarc not found, audio lookup will fail",
                     "progress": 10,
                 })

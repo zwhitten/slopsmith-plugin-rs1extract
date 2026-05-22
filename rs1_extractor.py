@@ -283,9 +283,21 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
     hsan_path = f"manifests/{manifest_dir}/{manifest_dir}.hsan"
     hsan_raw = reader.get(hsan_path)
     if not hsan_raw:
-        hsan_raw = reader.get_matching([f"*{manifest_dir}.hsan"])
-        if hsan_raw:
-            hsan_raw = list(hsan_raw.values())[0]
+        preferred_name = f"{manifest_dir}.hsan"
+        hsan_matches = reader.get_matching(
+            [f"*manifests/{manifest_dir}/*.hsan", f"*{manifest_dir}.hsan"]
+        )
+        if hsan_matches:
+            normalized_hsan_path = hsan_path.lower().lstrip("/")
+            hsan_candidates = sorted(
+                hsan_matches.items(),
+                key=lambda item: (
+                    item[0].lower().lstrip("/") != normalized_hsan_path,
+                    Path(item[0]).name.lower() != preferred_name.lower(),
+                    item[0].lower().lstrip("/"),
+                ),
+            )
+            hsan_raw = hsan_candidates[0][1]
 
     hsan_data = json.loads(hsan_raw) if hsan_raw else {"Entries": {}}
     hsan_entries = hsan_data.get("Entries", {})

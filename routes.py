@@ -195,7 +195,7 @@ def setup(app, context):
             xblock_files = {
                 name: name.rsplit("/", 1)[-1]
                 for name in reader.list_files()
-                if "gamexblocks/" in name.lower() and name.endswith(".xblock")
+                if "gamexblocks/" in name.lower() and name.lower().endswith(".xblock")
             }
             song_keys = [(fname.replace("_fcp_dlc.xblock", "").replace(".xblock", ""), path, fname)
                          for path, fname in sorted(xblock_files.items())]

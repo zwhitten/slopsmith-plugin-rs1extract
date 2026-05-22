@@ -261,7 +261,7 @@ def process_pack(pack_name, pack_config, songs_reader, output_dir, filter_keys=N
     xblock_files = {
         name: name.rsplit("/", 1)[-1]
         for name in reader.list_files()
-        if "gamexblocks/" in name.lower() and name.endswith(".xblock")
+        if "gamexblocks/" in name.lower() and name.lower().endswith(".xblock")
     }
 
     song_keys = []
